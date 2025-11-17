@@ -1,0 +1,100 @@
+﻿version: '3.8'
+
+services:
+  # Redis - State Store
+  redis:
+    image: redis:6
+    container_name: playerservice_redis
+    ports:
+      - "6379:6379"
+    networks:
+      - dapr-network
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Dapr Placement Service
+  dapr-placement:
+    image: daprio/dapr:1.16.2
+    container_name: playerservice_placement
+    command: [ "./placement", "-port", "50005" ]
+    ports:
+      - "50005:50005"
+    networks:
+      - dapr-network
+
+  # Dapr Scheduler Service
+  dapr-scheduler:
+    image: daprio/dapr:1.16.2
+    container_name: playerservice_scheduler
+    command: [ "./scheduler", "--etcd-data-dir", "/var/run/dapr/scheduler" ]
+    ports:
+      - "50006:50006"
+      - "2379:2379"
+    networks:
+      - dapr-network
+    volumes:
+      - scheduler-data:/var/run/dapr/scheduler
+
+  # Zipkin - Distributed Tracing
+  zipkin:
+    image: openzipkin/zipkin
+    container_name: playerservice_zipkin
+    ports:
+      - "9411:9411"
+    networks:
+      - dapr-network
+
+  # PlayerService App
+  playerservice:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: playerservice_app
+    ports:
+      - "5000:5000"
+    environment:
+      - ASPNETCORE_URLS=http://+:5000
+      - ASPNETCORE_ENVIRONMENT=Development
+    depends_on:
+      - redis
+      - dapr-placement
+    networks:
+      - dapr-network
+
+  # Dapr Sidecar for PlayerService
+  playerservice-dapr:
+    image: daprio/daprd:1.16.2
+    container_name: playerservice_dapr
+    command: [
+      "./daprd",
+      "-app-id", "playerservice",
+      "-app-port", "5000",
+      "-app-channel-address", "playerservice",
+      "-dapr-http-port", "3500",
+      "-dapr-grpc-port", "50001",
+      "-placement-host-address", "dapr-placement:50005",
+      "-resources-path", "/components",
+      "-config", "/configuration/config.yaml"
+    ]
+    ports:
+      - "3500:3500"
+      - "50001:50001"
+    volumes:
+      - ./PlayerService/components:/components
+      - ./dapr-config:/configuration
+    depends_on:
+      - playerservice
+      - redis
+      - dapr-placement
+    networks:
+      - dapr-network
+
+networks:
+  dapr-network:
+    driver: bridge
+
+volumes:
+  scheduler-data:
